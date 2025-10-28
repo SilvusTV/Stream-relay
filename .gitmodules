@@ -1,0 +1,6 @@
+[submodule "libs/librist"]
+	path = libs/librist
+	url = https://code.videolan.org/rist/librist
+[submodule "libs/srt"]
+	path = libs/srt
+	url = https://github.com/Haivision/srt

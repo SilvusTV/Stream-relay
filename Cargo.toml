@@ -1,0 +1,10 @@
+[package]
+name = "stream-relay"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+rist = []
+srt  = []
+
+[dependencies]
