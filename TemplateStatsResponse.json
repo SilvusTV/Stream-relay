@@ -1,0 +1,15 @@
+{
+    "data": {
+        "bitrate": 0,
+        "bytesRcvDrop": 0,
+        "bytesRcvLoss": 0,
+        "mbpsBandwidth": 0.0,
+        "mbpsRecvRate": 0.0,
+        "msRcvBuf": 0,
+        "pktRcvDrop": 0,
+        "pktRcvLoss": 0,
+        "rtt": 0.0,
+        "uptime": 795
+    },
+    "status": "ok"
+}
