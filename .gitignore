@@ -1,6 +1,5 @@
 .idea/
 /target
-/libs/
 **/*.rs.bk
 /.env
 
