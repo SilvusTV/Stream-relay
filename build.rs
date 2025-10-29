@@ -13,72 +13,88 @@ fn run(cmd: &mut Command) {
 
 #[cfg(feature = "rist")]
 fn build_and_link_librist() {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_else(|_| String::new());
     // Dossier racine du sous-module librist (chemin relatif au Cargo.toml du projet)
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("libs").join("librist");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("libs")
+        .join("librist");
     // On construit dans un dossier "build" à l'intérieur du sous-module
     let build_dir = root.join("build");
 
-    // 1) Configure le projet librist avec Meson en mode Release
-    run(
-        Command::new("meson")
+    if target_os == "windows" {
+        run(Command::new("meson")
             .current_dir(&root)
             .arg("setup")
             .arg(&build_dir)
             .arg("--buildtype=release")
             .arg("-Dbuilt_tools=false")
             .arg("-Dtest=false")
-            .arg("--wipe"),
-    );
-    // 2) Compile librist avec Meson
-    run(
-        Command::new("meson")
+            .arg("--wipe"));
+    } else {
+        run(Command::new("meson")
             .current_dir(&root)
-            .arg("compile")
-            .arg("-C")
-            .arg(&build_dir),
-    );
+            .arg("setup")
+            .arg(&build_dir)
+            .arg("--buildtype=release"));
+    }
+    // 2) Compile librist avec Meson
+    run(Command::new("meson")
+        .current_dir(&root)
+        .arg("compile")
+        .arg("-C")
+        .arg(&build_dir));
 
     // 3) Indique à Cargo où trouver la bibliothèque compilée
     // librist génère ses .dylib directement dans le dossier build/
     println!("cargo:rustc-link-search=native={}", build_dir.display());
     // On link en dynamique (dylib) la bibliothèque nommée "librist" (nom réel du target Meson)
-    println!("cargo:rustc-link-lib=dylib=librist");
+    if target_os == "windows" {
+        println!("cargo:rustc-link-lib=dylib=librist");
+    } else {
+        println!("cargo:rustc-link-lib=dylib=rist");
+    }
 }
 
 #[cfg(feature = "srt")]
 fn build_and_link_srt() {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_else(|_| String::new());
     // Dossier racine du sous-module srt
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("libs").join("srt");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("libs")
+        .join("srt");
     // Dossier de build dédié
     let build_dir = root.join("build");
 
     // 1) Configure le projet srt avec CMake (profil Release, sans applications)
-    run(
-        Command::new("cmake")
-            .current_dir(&root)
-            .arg("-S")
-            .arg(".")
-            .arg("-B")
-            .arg(&build_dir)
-            .arg("-DCMAKE_BUILD_TYPE=Release")
-            .arg("-DENABLE_APPS=OFF"),
-    );
+    run(Command::new("cmake")
+        .current_dir(&root)
+        .arg("-S")
+        .arg(".")
+        .arg("-B")
+        .arg(&build_dir)
+        .arg("-DCMAKE_BUILD_TYPE=Release")
+        .arg("-DENABLE_APPS=OFF"));
     // 2) Compile srt avec CMake
-    run(
-        Command::new("cmake")
-            .current_dir(&root)
-            .arg("--build")
-            .arg(&build_dir)
-            .arg("--config")
-            .arg("Release"),
-    );
+    run(Command::new("cmake")
+        .current_dir(&root)
+        .arg("--build")
+        .arg(&build_dir)
+        .arg("--config")
+        .arg("Release"));
 
     // 3) Indique à Cargo où trouver la bibliothèque compilée
-    // Sous Windows avec un build multi-config, CMake place les artefacts dans build/Release
-    let lib_dir = build_dir.join("Release");
-    println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    // On link en dynamique la bibliothèque nommée "srt" (srt.lib -> srt.dll)
-    println!("cargo:rustc-link-lib=dylib=srt");
+    if target_os == "windows" {
+        // Sous Windows avec un build multi-config, CMake place les artefacts dans build/Release
+        let lib_dir = build_dir.join("Release");
+        println!("cargo:rustc-link-search=native={}", lib_dir.display());
+        // On link en dynamique la bibliothèque nommée "srt" (srt.lib -> srt.dll)
+        println!("cargo:rustc-link-lib=dylib=srt");
+    }else {
+        // srt produit un fichier statique "libsrt.a" directement dans build/
+        println!("cargo:rustc-link-search=native={}", build_dir.display());
+        // On link en statique la bibliothèque nommée "srt"
+        println!("cargo:rustc-link-lib=static=srt");
+    }
 }
 
 fn main() {

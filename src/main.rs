@@ -3,11 +3,9 @@
 use std::time::{Duration, Instant};
 use rocket::{fairing::{Fairing, Info, Kind}, Request, Data, Response, State};
 use rocket::{get, launch, routes};
-use rocket::http::{ContentType, Status};
 use rocket::serde::json::Json;
 use serde::Serialize;
-
-use prometheus::{Encoder, TextEncoder, Registry, IntCounterVec, IntGauge, HistogramVec, HistogramOpts, opts};
+use prometheus::{Registry, IntCounterVec, IntGauge, HistogramVec, HistogramOpts, opts};
 
 // Regroupe le registry Prometheus et les métriques de l'application
 struct Metrics {
