@@ -24,7 +24,10 @@ fn build_and_link_librist() {
             .current_dir(&root)
             .arg("setup")
             .arg(&build_dir)
-            .arg("--buildtype=release"),
+            .arg("--buildtype=release")
+            .arg("-Dbuilt_tools=false")
+            .arg("-Dtest=false")
+            .arg("--wipe"),
     );
     // 2) Compile librist avec Meson
     run(
@@ -38,8 +41,8 @@ fn build_and_link_librist() {
     // 3) Indique à Cargo où trouver la bibliothèque compilée
     // librist génère ses .dylib directement dans le dossier build/
     println!("cargo:rustc-link-search=native={}", build_dir.display());
-    // On link en dynamique (dylib) la bibliothèque nommée "rist"
-    println!("cargo:rustc-link-lib=dylib=rist");
+    // On link en dynamique (dylib) la bibliothèque nommée "librist" (nom réel du target Meson)
+    println!("cargo:rustc-link-lib=dylib=librist");
 }
 
 #[cfg(feature = "srt")]
@@ -71,10 +74,11 @@ fn build_and_link_srt() {
     );
 
     // 3) Indique à Cargo où trouver la bibliothèque compilée
-    // srt produit un fichier statique "libsrt.a" directement dans build/
-    println!("cargo:rustc-link-search=native={}", build_dir.display());
-    // On link en statique la bibliothèque nommée "srt"
-    println!("cargo:rustc-link-lib=static=srt");
+    // Sous Windows avec un build multi-config, CMake place les artefacts dans build/Release
+    let lib_dir = build_dir.join("Release");
+    println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    // On link en dynamique la bibliothèque nommée "srt" (srt.lib -> srt.dll)
+    println!("cargo:rustc-link-lib=dylib=srt");
 }
 
 fn main() {
