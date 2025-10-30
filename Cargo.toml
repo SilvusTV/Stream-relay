@@ -18,3 +18,10 @@ thiserror = "1"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["time", "net", "rt-multi-thread", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter", "time"] }
+tracing-log = "0.2"
+uuid = { version = "1", features = ["v4", "fast-rng", "serde"] }
+url = "2"
+regex = "1"
+time = { version = "0.3", features = ["formatting", "macros"] }

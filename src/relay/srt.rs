@@ -26,7 +26,9 @@ fn is_listener_uri(uri: &str) -> bool {
 }
 
 fn describe_uri(prefix: &str, uri: &str) -> String {
-    format!("[SRT] {}={}", prefix, uri)
+    // Redact secrets before describing
+    let red = crate::common::uri::redact_uri_secrets(uri);
+    format!("{}={}", prefix, red)
 }
 
 pub struct SrtReceiver {

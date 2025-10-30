@@ -1,14 +1,18 @@
 mod structures;
 mod web;
 mod relay;
+mod common;
 
 use clap::{Parser, Subcommand};
 use rocket::{routes, Rocket, Build};
 use rocket::fairing::AdHoc;
+use tracing::{info, debug};
+use crate::common::logging::{self, events};
 
 // Constructeur de l'instance Rocket avec routes et fairings
 fn build_rocket() -> Rocket<Build> {
-    let metrics = structures::Metrics::new();
+    let metrics = std::sync::Arc::new(structures::Metrics::new());
+    structures::Metrics::set_global(metrics.clone());
 
     rocket::build()
         .manage(metrics)
@@ -29,11 +33,11 @@ fn build_rocket() -> Rocket<Build> {
                         .ok()
                         .and_then(|s| s.parse().ok())
                         .unwrap_or(80);
-                    println!("[INIT] Auto SRT probe enabled");
-                    println!("[INIT] SRT defaults: input={} output={} latency_ms={}", input, output, latency_ms);
+                    info!(event = events::RELAY_START, subsystem = "srt", protocol = "srt", msg = "Auto SRT probe enabled");
+                    debug!(event = events::RELAY_START, subsystem = "srt", protocol = "srt", input = %input, output = %output, latency_ms = latency_ms, msg = "SRT defaults");
                     crate::relay::start_srt_auto(input, output, latency_ms);
                 } else {
-                    println!("[INIT] Auto SRT probe disabled via SRTRIST_AUTO_SRT=0");
+                    info!(event = events::RELAY_STOP, subsystem = "srt", protocol = "srt", msg = "Auto SRT probe disabled via SRTRIST_AUTO_SRT=0");
                 }
             }
 
@@ -43,19 +47,22 @@ fn build_rocket() -> Rocket<Build> {
                 if auto {
                     let input = std::env::var("SRTRIST_RIST_INPUT").unwrap_or_else(|_| "rist://@:10000?mode=listener".to_string());
                     let output = std::env::var("SRTRIST_RIST_OUTPUT").unwrap_or_else(|_| "rist://127.0.0.1:11000?mode=caller".to_string());
-                    println!("[INIT] Auto RIST probe enabled");
-                    println!("[INIT] RIST defaults: input={} output={}", input, output);
+                    info!(event = events::RELAY_START, subsystem = "rist", protocol = "rist", msg = "Auto RIST probe enabled");
+                    debug!(event = events::RELAY_START, subsystem = "rist", protocol = "rist", input = %input, output = %output, msg = "RIST defaults");
                     crate::relay::start_rist_auto(input, output);
                 } else {
-                    println!("[INIT] Auto RIST probe disabled via SRTRIST_AUTO_RIST=0");
+                    info!(event = events::RELAY_STOP, subsystem = "rist", protocol = "rist", msg = "Auto RIST probe disabled via SRTRIST_AUTO_RIST=0");
                 }
             }
 
             // Afficher l'adresse HTTP effective + URLs utiles
             let addr = rocket.config().address;
             let port = rocket.config().port;
-            println!("[INIT] HTTP server listening on {}:{}", addr, port);
-            println!("[INFO] URLs: http://{}:{}/health  http://{}:{}/stats  http://{}:{}/metrics", addr, port, addr, port, addr, port);
+            info!(event = events::APP_READY, subsystem = "http", msg = "HTTP server listening", address = %addr, port = port);
+            debug!(event = events::APP_READY, subsystem = "http", msg = "Useful URLs", health = format!("http://{}:{}/health", addr, port), stats = format!("http://{}:{}/stats", addr, port), metrics = format!("http://{}:{}/metrics", addr, port));
+        })))
+        .attach(AdHoc::on_shutdown("log-shutdown", |_| Box::pin(async move {
+            info!(event = events::APP_SHUTDOWN, msg = "Application shutting down");
         })))
         .mount(
             "/",
@@ -108,8 +115,11 @@ enum Commands {
 
 #[rocket::main]
 async fn main() -> Result<(), rocket::Error> {
-    // Exemple: initialisations avant le lancement (logs, ENV, tâches en arrière-plan, etc.)
-    // ex: tracing_subscriber::fmt::init();
+    // Init JSON logger (stdout)
+    logging::init();
+
+    // Minimal audit log at start
+    info!(event = events::APP_START, msg = "Application starting", version = env!("CARGO_PKG_VERSION"), os = std::env::consts::OS);
 
     let cli = Cli::parse();
 
@@ -117,13 +127,13 @@ async fn main() -> Result<(), rocket::Error> {
         match cmd {
             Commands::Srt2srt { input, output, latency_ms } => {
                 if let Err(e) = relay::run_srt_probe(input, output, latency_ms).await {
-                    eprintln!("SRT probe failed: {e}");
+                    tracing::error!(event = events::RELAY_ERROR, subsystem = "srt", protocol = "srt", error = %e, msg = "SRT probe failed");
                 }
                 return Ok(());
             }
             Commands::Rist2rist { input, output } => {
                 if let Err(e) = relay::run_rist_probe(input, output).await {
-                    eprintln!("RIST probe failed: {e}");
+                    tracing::error!(event = events::RELAY_ERROR, subsystem = "rist", protocol = "rist", error = %e, msg = "RIST probe failed");
                 }
                 return Ok(());
             }
