@@ -1,24 +1,24 @@
-// Traits de transport communs pour SRT et RIST (squelettes uniquement)
-// Pour l'instant, ces traits définissent juste les signatures sans implémentation requise.
+use crate::structures::{TResult, TransportError};
+use async_trait::async_trait;
 
-#[allow(dead_code)]
-pub trait TransportRx {
-    // Lecture d'un paquet/message (placeholder)
-    fn poll_recv(&mut self) -> anyhow::Result<()>;
+// API commune minimale pour les transports de type « message » (SRT/RIST)
+// Nota: l’implémentation V1 utilise UDP comme stub fonctionnel pour assurer un vrai débit local.
+
+#[async_trait]
+pub trait TransportRx: Send {
+    // Lit des octets dans buf; Ok(n) avec n>0 si des données ont été reçues.
+    // En cas de délai d’attente, renvoie TransportError::Timeout.
+    async fn recv(&mut self, buf: &mut [u8]) -> TResult<usize>;
 }
 
-#[allow(dead_code)]
-pub trait TransportTx {
-    // Écriture d'un paquet/message (placeholder)
-    fn poll_send(&mut self) -> anyhow::Result<()>;
+#[async_trait]
+pub trait TransportTx: Send {
+    // Envoie les n octets de buf; renvoie le nombre d’octets envoyés.
+    async fn send(&mut self, buf: &[u8]) -> TResult<usize>;
 }
 
-#[allow(dead_code)]
-pub trait Transport: TransportRx + TransportTx {
-    // Ouvre la ressource (socket, session, etc.)
-    fn open(&mut self) -> anyhow::Result<()>;
-    // Ferme la ressource
+pub trait TransportMeta {
+    fn open(&mut self) -> TResult<()>;
     fn close(&mut self);
-    // Description humaine de l'endpoint/connexion
     fn describe(&self) -> String;
 }

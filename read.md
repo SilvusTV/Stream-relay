@@ -558,3 +558,132 @@ $env:SRTRIST_SRT_INPUT = "srt://@:12000?mode=listener"; cargo run --features srt
 Remarques:
 - Les sous‑commandes explicites (`srt2srt`, `rist2rist`) continuent de fonctionner; si vous les utilisez, le programme exécute la probe demandée puis termine (comportement inchangé).
 - Windows: la copie automatique des DLL dans `target/{debug,release}` reste en place; aucune action manuelle n’est nécessaire pour lancer le binaire après `cargo build`.
+
+
+---
+
+### Milestone 2 — Transports réels (SRT & RIST) branchés à la pipe — 2025-10-30
+
+#### Ce qui a été mis en place
+- Fondation « transport » commune:
+  - `src/structures/error.rs` définit `TransportError` (via `thiserror`) et l’alias `TResult<T>`.
+  - `src/relay/transport.rs` expose 3 traits asynchrones minimalistes:
+    - `TransportRx::recv(&mut self, buf) -> TResult<usize>`
+    - `TransportTx::send(&mut self, buf) -> TResult<usize>`
+    - `TransportMeta::{open, close, describe}`
+- Pipe réutilisable:
+  - `src/relay/pipe.rs` fournit `run_pipe<Rx, Tx>(rx, tx)`:
+    - Tampon réutilisé de 64 KiB
+    - Boucle `recv → send`
+    - Sur `TransportError::Timeout`: courte attente (5 ms) puis reprise; sur toute autre erreur: log et sortie propre
+- SRT — première implémentation fonctionnelle:
+  - `src/relay/srt.rs` implémente `SrtReceiver` (RX) et `SrtSender` (TX)
+  - Parsing d’URI simple `srt://`:
+    - RX: `srt://@:PORT` ou `...?mode=listener` pour écouter
+    - TX: `srt://HOST:PORT` pour émettre
+  - I/O réelles avec `tokio::net::UdpSocket` (V1 de travail): on transfère réellement des octets en local, avec timeouts mappés en `TransportError::Timeout`
+  - Implémente `TransportRx`, `TransportTx`, `TransportMeta`
+- RIST — première implémentation fonctionnelle:
+  - `src/relay/rist.rs` implémente `RistReceiver`/`RistSender` avec la même logique et les URIs `rist://`
+  - I/O via UDP comme pour SRT (V1), timeouts gérés
+- Câblage du relais (wiring):
+  - `src/relay/mod.rs` expose la pipe et des helpers:
+    - `run_srt_probe` / `run_rist_probe` créent les endpoints et appellent `run_pipe`
+    - `start_srt_auto` / `start_rist_auto` lancent la pipe en tâche de fond
+  - Les prints de démarrage affichent systématiquement les URIs d’entrée/sortie
+- Dépendances Cargo:
+  - Ajout de `thiserror`, `async-trait`, et activation des features tokio nécessaires (`time`, `net`, `rt-multi-thread`, `macros`)
+
+> Note: cette V1 utilise UDP sous le capot pour valider la pipe et le câblage. Le `build.rs` reste prêt pour les features `srt`/`rist` (FFI C), mais le runtime actuel ne dépend pas encore des bibliothèques C.
+
+#### Comment tester que ça fonctionne
+Vous avez deux modes: « probe CLI » (process éphémère) et « auto-probes » (lancées avec le serveur HTTP).
+
+1) Test SRT en boucle locale (probe CLI)
+- Terminal A (lance la pipe: écoute sur 9000 → envoie vers 10000):
+```powershell
+cargo run -- srt2srt --input srt://@:9000?mode=listener --output srt://127.0.0.1:10000?mode=caller --latency-ms 80
+```
+- Terminal B (envoyer des données vers l’entrée sur 9000). Quelques options possibles:
+  - Avec ffmpeg (si dispo):
+    ```powershell
+    ffmpeg -re -f lavfi -i testsrc=size=320x240:rate=25 -f mpegts udp://127.0.0.1:9000
+    ```
+  - Avec PowerShell (envoi de bytes arbitraires):
+    ```powershell
+    $udpClient = New-Object System.Net.Sockets.UdpClient
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes("hello-srt")
+    $udpClient.Connect('127.0.0.1',9000)
+    [void]$udpClient.Send($bytes,$bytes.Length)
+    $udpClient.Close()
+    ```
+- Observation attendue: le binaire affiche les URIs `input`/`output`; la pipe transfère les paquets reçus sur 9000 vers 127.0.0.1:10000.
+  - Pour voir la sortie côté 10000, vous pouvez écouter avec un autre outil (ex: Wireshark, `socat - UDP4-RECVFROM:10000` sous WSL, ou un petit script UDP).
+
+2) Test RIST en boucle locale (probe CLI)
+- Terminal A:
+```powershell
+cargo run -- rist2rist --input rist://@:10000?mode=listener --output rist://127.0.0.1:11000?mode=caller
+```
+- Terminal B: envoyez des datagrammes sur `127.0.0.1:10000` comme ci‑dessus. Les octets doivent être relayés vers `127.0.0.1:11000`.
+
+3) Test via serveur HTTP et auto-probes
+- Lancer l’appli sans sous‑commande:
+```powershell
+cargo run
+```
+- Par défaut, l’appli démarre des auto-probes si les features sont activées à la compilation:
+  - `#[cfg(feature = "srt")]` pour SRT
+  - `#[cfg(feature = "rist")]` pour RIST
+- Variables d’environnement disponibles pour surcharger:
+  - SRT:
+    - `SRTRIST_AUTO_SRT=0` pour désactiver l’auto-probe
+    - `SRTRIST_SRT_INPUT` (par défaut `srt://@:9000?mode=listener`)
+    - `SRTRIST_SRT_OUTPUT` (par défaut `srt://127.0.0.1:10000?mode=caller`)
+    - `SRTRIST_SRT_LATENCY_MS` (par défaut `80`)
+  - RIST:
+    - `SRTRIST_AUTO_RIST=0` pour désactiver
+    - `SRTRIST_RIST_INPUT` (défaut `rist://@:10000?mode=listener`)
+    - `SRTRIST_RIST_OUTPUT` (défaut `rist://127.0.0.1:11000?mode=caller`)
+- Vous devriez voir au démarrage: l’adresse HTTP et les URIs d’entrée/sortie pour chaque auto-probe active.
+- Endpoints HTTP:
+  - `http://127.0.0.1:8000/health`
+  - `http://127.0.0.1:8000/stats`
+  - `http://127.0.0.1:8000/metrics`
+
+4) Remarques Windows (features FFI activées)
+- Si vous compilez avec `--features srt` et/ou `--features rist`, le `build.rs` construit les libs C et lie en dynamique sous Windows.
+- Il faut que `srt.dll` (et la DLL RIST) soient trouvées au runtime. Deux solutions:
+  - Copier les DLLs à côté du binaire (`target/debug` ou `target/release`)
+  - Ou ajouter les dossiers `libs/srt/build/Release` et `libs/librist/build` au `%PATH%` de la session avant d’exécuter
+
+#### Ce que ça valide aujourd’hui
+- L’API commune de transport fonctionne: on peut brancher n’importe quel `Receiver`/`Sender` conforme aux traits et les relier avec la même `run_pipe`.
+- Les URIs simplifiées sont suffisantes pour des tests locaux et montrent le « débit réel » entre deux sockets.
+- La boucle gère un timeout non-bloquant et effectue un backoff minimal.
+
+#### Ce qu’il manque pour être pleinement fonctionnel (prochaines étapes)
+- SRT/RIST réels (FFI):
+  - Remplacer l’implémentation UDP par des wrappers sûrs autour de `libsrt` et `librist` (via `bindgen` ou crates dédiées)
+  - Gérer la configuration SRT (latence, payload size, modes caller/listener complets, encryption si activée)
+  - Gérer les profils RIST (simple/advanced), clés, retransmissions, NAKs, etc.
+- Robustesse réseau:
+  - Reconnexions automatiques, backoff exponentiel, journalisation des transitions d’état
+  - Gestion propre de la fermeture (`close`) et des erreurs transitoires vs fatales
+- Observabilité et métriques réseau:
+  - Débits, pertes, latences/jitter, compteurs de reconnexions, erreurs par code/protocole
+  - Exposer ces métriques sur `/metrics` et dans `/stats`
+- Parsing d’URI plus complet:
+  - Support des paramètres SRT/RIST standards (`latency`, `pbkeylen`, `passphrase`, `mode`, `streamid`, etc.)
+  - Validation stricte et messages d’erreur détaillés
+- CLI et configuration:
+  - Sous-commandes plus riches (`srt listen/connect`, `rist listen/connect`, fichiers de config, ENV)
+  - Logs structurés (`tracing`) et niveaux configurables
+- Packaging/CI:
+  - Script de copie automatique des DLLs sur Windows
+  - Tests unitaires/integration (incl. pipe sur sockets), et CI
+
+#### TL;DR
+- Vous pouvez déjà vérifier un transfert réel d’octets en local via les sous-commandes `srt2srt` et `rist2rist`.
+- Le cœur (traits + pipe) est en place et réutilisable.
+- La prochaine grosse marche consiste à brancher les vraies bibliothèques SRT/RIST à la place des sockets UDP et à instrumenter les métriques.

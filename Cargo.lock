@@ -1176,12 +1176,14 @@ name = "stream-relay"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "once_cell",
  "prometheus",
  "rocket",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
 ]
 
