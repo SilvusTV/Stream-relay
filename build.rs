@@ -1,5 +1,7 @@
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::env;
 
 // Petite fonction utilitaire pour exécuter une commande système (ex: meson, cmake).
 // - On lance la commande
@@ -8,6 +10,29 @@ fn run(cmd: &mut Command) {
     let status = cmd.status().expect("failed to spawn command");
     if !status.success() {
         panic!("Command failed: {:?}", cmd);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn target_profile_dir() -> PathBuf {
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(profile)
+}
+
+#[cfg(target_os = "windows")]
+fn copy_dll_if_exists(src: &Path, dst_dir: &Path) {
+    if src.exists() {
+        if let Err(e) = fs::create_dir_all(dst_dir) {
+            println!("cargo:warning=failed to create target dir {}: {}", dst_dir.display(), e);
+            return;
+        }
+        let dst = dst_dir.join(src.file_name().unwrap());
+        match fs::copy(src, &dst) {
+            Ok(_) => println!("cargo:warning=Copied {} -> {}", src.display(), dst.display()),
+            Err(e) => println!("cargo:warning=Failed to copy {} -> {}: {}", src.display(), dst.display(), e),
+        }
+    } else {
+        println!("cargo:warning=DLL not found (optional copy skipped): {}", src.display());
     }
 }
 
@@ -50,6 +75,16 @@ fn build_and_link_librist() {
     // On link en dynamique (dylib) la bibliothèque nommée "librist" (nom réel du target Meson)
     if target_os == "windows" {
         println!("cargo:rustc-link-lib=dylib=librist");
+        // Copie automatique de la DLL dans target/{profile}
+        #[cfg(target_os = "windows")]
+        {
+            let dst_dir = target_profile_dir();
+            let dll1 = build_dir.join("librist.dll");
+            let dll2 = build_dir.join("rist.dll");
+            // Tenter les deux noms possibles selon la config Meson
+            copy_dll_if_exists(&dll1, &dst_dir);
+            copy_dll_if_exists(&dll2, &dst_dir);
+        }
     } else {
         println!("cargo:rustc-link-lib=dylib=rist");
     }
@@ -89,7 +124,14 @@ fn build_and_link_srt() {
         println!("cargo:rustc-link-search=native={}", lib_dir.display());
         // On link en dynamique la bibliothèque nommée "srt" (srt.lib -> srt.dll)
         println!("cargo:rustc-link-lib=dylib=srt");
-    }else {
+        // Copie automatique de srt.dll vers target/{profile}
+        #[cfg(target_os = "windows")]
+        {
+            let dst_dir = target_profile_dir();
+            let dll = lib_dir.join("srt.dll");
+            copy_dll_if_exists(&dll, &dst_dir);
+        }
+    } else {
         // srt produit un fichier statique "libsrt.a" directement dans build/
         println!("cargo:rustc-link-search=native={}", build_dir.display());
         // On link en statique la bibliothèque nommée "srt"
