@@ -56,11 +56,17 @@ fn build_and_link_librist() {
             .arg("-Dtest=false")
             .arg("--wipe"));
     } else {
-        run(Command::new("meson")
+        let mut cmd = Command::new("meson");
+        cmd
             .current_dir(&root)
             .arg("setup")
             .arg(&build_dir)
-            .arg("--buildtype=release"));
+            .arg("--buildtype=release");
+        // macOS: forcer la lib statique pour éviter la dépendance runtime .dylib
+        if target_os == "macos" {
+            cmd.arg("--default-library=static");
+        }
+        run(&mut cmd);
     }
     // 2) Compile librist avec Meson
     run(Command::new("meson")
@@ -70,9 +76,9 @@ fn build_and_link_librist() {
         .arg(&build_dir));
 
     // 3) Indique à Cargo où trouver la bibliothèque compilée
-    // librist génère ses .dylib directement dans le dossier build/
+    // librist génère ses artefacts directement dans le dossier build/
     println!("cargo:rustc-link-search=native={}", build_dir.display());
-    // On link en dynamique (dylib) la bibliothèque nommée "librist" (nom réel du target Meson)
+    // macOS: lier statiquement; autres OS non-Windows: lier dynamiquement par défaut
     if target_os == "windows" {
         println!("cargo:rustc-link-lib=dylib=librist");
         // Copie automatique de la DLL dans target/{profile}
@@ -85,6 +91,8 @@ fn build_and_link_librist() {
             copy_dll_if_exists(&dll1, &dst_dir);
             copy_dll_if_exists(&dll2, &dst_dir);
         }
+    } else if target_os == "macos" {
+        println!("cargo:rustc-link-lib=static=rist");
     } else {
         println!("cargo:rustc-link-lib=dylib=rist");
     }
@@ -101,14 +109,22 @@ fn build_and_link_srt() {
     let build_dir = root.join("build");
 
     // 1) Configure le projet srt avec CMake (profil Release, sans applications)
-    run(Command::new("cmake")
-        .current_dir(&root)
-        .arg("-S")
-        .arg(".")
-        .arg("-B")
-        .arg(&build_dir)
-        .arg("-DCMAKE_BUILD_TYPE=Release")
-        .arg("-DENABLE_APPS=OFF"));
+    {
+        let mut cmd = Command::new("cmake");
+        cmd
+            .current_dir(&root)
+            .arg("-S")
+            .arg(".")
+            .arg("-B")
+            .arg(&build_dir)
+            .arg("-DCMAKE_BUILD_TYPE=Release")
+            .arg("-DENABLE_APPS=OFF");
+        // macOS uniquement: compiler SRT en statique pour éviter la dépendance runtime .dylib
+        if target_os == "macos" {
+            cmd.arg("-DENABLE_SHARED=OFF").arg("-DENABLE_STATIC=ON");
+        }
+        run(&mut cmd);
+    }
     // 2) Compile srt avec CMake
     run(Command::new("cmake")
         .current_dir(&root)
@@ -132,10 +148,14 @@ fn build_and_link_srt() {
             copy_dll_if_exists(&dll, &dst_dir);
         }
     } else {
-        // srt produit un fichier statique "libsrt.a" directement dans build/
         println!("cargo:rustc-link-search=native={}", build_dir.display());
-        // On link en statique la bibliothèque nommée "srt"
-        println!("cargo:rustc-link-lib=static=srt");
+        if target_os == "macos" {
+            // macOS: lier statiquement
+            println!("cargo:rustc-link-lib=static=srt");
+        } else {
+            // autres OS non-Windows: lier dynamiquement
+            println!("cargo:rustc-link-lib=dylib=srt");
+        }
     }
 }
 
