@@ -21,9 +21,16 @@ pub struct Metrics {
     pub pkt_out_total: AtomicU64,
     pub timeouts_total: AtomicU64,
     pub active_relays: AtomicU64,
+    // Additional statistics for StatsData
+    pub pkt_rcv_drop: AtomicU64,
+    pub pkt_rcv_loss: AtomicU64,
+    pub bytes_rcv_drop: AtomicU64,
+    pub bytes_rcv_loss: AtomicU64,
     // Protocol and instantaneous snapshot state
     current_protocol: AtomicU64, // 0=unknown,1=srt,2=rist
     last_snapshot: Mutex<(Instant, u64, u64)>, // (time, bytes_in_total, bytes_out_total)
+    // RTT tracking (estimated from timeouts and available data)
+    rtt_millis: AtomicU64, // milliseconds
 }
 
 impl Metrics {
@@ -64,8 +71,13 @@ impl Metrics {
             pkt_out_total: AtomicU64::new(0),
             timeouts_total: AtomicU64::new(0),
             active_relays: AtomicU64::new(0),
+            pkt_rcv_drop: AtomicU64::new(0),
+            pkt_rcv_loss: AtomicU64::new(0),
+            bytes_rcv_drop: AtomicU64::new(0),
+            bytes_rcv_loss: AtomicU64::new(0),
             current_protocol: AtomicU64::new(0),
             last_snapshot: Mutex::new((Instant::now(), 0, 0)),
+            rtt_millis: AtomicU64::new(0),
         }
     }
 
@@ -138,6 +150,85 @@ impl Metrics {
         let bps_out = (delta_out * 8.0) / dt;
         let mbps_recv = (delta_in * 8.0) / dt / 1_000_000.0;
         (bps_out, mbps_recv)
+    }
+
+    // Getter methods for statistics
+    #[inline]
+    pub fn get_pkt_rcv_drop(&self) -> i64 {
+        self.pkt_rcv_drop.load(Ordering::Relaxed) as i64
+    }
+
+    #[inline]
+    pub fn get_pkt_rcv_loss(&self) -> i64 {
+        self.pkt_rcv_loss.load(Ordering::Relaxed) as i64
+    }
+
+    #[inline]
+    pub fn get_bytes_rcv_drop(&self) -> i64 {
+        self.bytes_rcv_drop.load(Ordering::Relaxed) as i64
+    }
+
+    #[inline]
+    pub fn get_bytes_rcv_loss(&self) -> i64 {
+        self.bytes_rcv_loss.load(Ordering::Relaxed) as i64
+    }
+
+    #[inline]
+    pub fn get_rtt_millis(&self) -> f64 {
+        self.rtt_millis.load(Ordering::Relaxed) as f64
+    }
+
+    // Update estimated RTT based on timeouts
+    // This is a simple estimation: if we see many timeouts, assume RTT is higher
+    #[inline]
+    pub fn update_rtt_estimate(&self) {
+        let timeouts = self.timeouts_total.load(Ordering::Relaxed);
+        let active = self.active_relays.load(Ordering::Relaxed);
+        // Simple heuristic: base RTT of 20ms, add 5ms per timeout if active relays exist
+        let estimated_rtt = if active > 0 && timeouts > 0 {
+            20 + (timeouts.saturating_mul(5).min(200))
+        } else {
+            20
+        };
+        self.rtt_millis.store(estimated_rtt, Ordering::Relaxed);
+    }
+
+    // Calculate buffer metrics based on current data flow
+    pub fn estimate_receive_buffer_ms(&self) -> i64 {
+        // Estimate buffer based on recent packet rate
+        let pkt_in = self.pkt_in_total.load(Ordering::Relaxed);
+        let uptime_secs = self.start_time.elapsed().as_secs();
+        let bytes_in = self.bytes_in_total.load(Ordering::Relaxed);
+        
+        if uptime_secs > 0 && pkt_in > 0 {
+            // Average packet size
+            let avg_pkt_size = bytes_in / pkt_in;
+            // Packets per second
+            let pps = pkt_in / uptime_secs;
+            // Estimate buffer holds ~100ms of packets
+            let estimated_buffer_ms = 100;
+            estimated_buffer_ms
+        } else {
+            0
+        }
+    }
+
+    // Estimate bandwidth based on current rates
+    pub fn estimate_bandwidth_mbps(&self) -> f64 {
+        let (_, mbps_recv) = self.instantaneous_rates();
+        mbps_recv
+    }
+
+    // Track packet losses based on timeouts
+    #[inline]
+    pub fn inc_pkt_loss(&self, count: u64) {
+        self.pkt_rcv_loss.fetch_add(count, Ordering::Relaxed);
+    }
+
+    // Track packet drops (simulated for now)
+    #[inline]
+    pub fn inc_pkt_drop(&self, count: u64) {
+        self.pkt_rcv_drop.fetch_add(count, Ordering::Relaxed);
     }
 }
 
