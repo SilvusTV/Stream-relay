@@ -18,6 +18,7 @@ pub struct StatsData {
 #[allow(non_snake_case)]
 #[derive(Serialize)]
 pub struct StatsResponse {
+    pub protocol: String,
     pub data: StatsData,
     pub status: &'static str,
 }

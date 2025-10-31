@@ -14,6 +14,7 @@ where
 
     if let Some(m) = Metrics::global() {
         m.inc_active_relays();
+        m.set_protocol(protocol);
     }
 
     info!(event = events::RELAY_START, subsystem = protocol, protocol = protocol, relay_id = %relay_id, input = %rx.describe(), output = %tx.describe(), msg = "Pipe start");

@@ -1,5 +1,5 @@
 use std::time::Instant;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use once_cell::sync::OnceCell;
 use prometheus::{opts, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Registry, Encoder, TextEncoder};
@@ -21,6 +21,9 @@ pub struct Metrics {
     pub pkt_out_total: AtomicU64,
     pub timeouts_total: AtomicU64,
     pub active_relays: AtomicU64,
+    // Protocol and instantaneous snapshot state
+    current_protocol: AtomicU64, // 0=unknown,1=srt,2=rist
+    last_snapshot: Mutex<(Instant, u64, u64)>, // (time, bytes_in_total, bytes_out_total)
 }
 
 impl Metrics {
@@ -61,6 +64,8 @@ impl Metrics {
             pkt_out_total: AtomicU64::new(0),
             timeouts_total: AtomicU64::new(0),
             active_relays: AtomicU64::new(0),
+            current_protocol: AtomicU64::new(0),
+            last_snapshot: Mutex::new((Instant::now(), 0, 0)),
         }
     }
 
@@ -95,6 +100,45 @@ impl Metrics {
     pub fn inc_pkt_out(&self) { self.pkt_out_total.fetch_add(1, Ordering::Relaxed); }
     #[inline]
     pub fn inc_timeout(&self) { self.timeouts_total.fetch_add(1, Ordering::Relaxed); }
+
+    // Protocol helpers
+    #[inline]
+    pub fn set_protocol(&self, protocol: &str) {
+        let code = match protocol.to_ascii_lowercase().as_str() {
+            "srt" => 1u64,
+            "rist" => 2u64,
+            _ => 0u64,
+        };
+        self.current_protocol.store(code, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn protocol_string(&self) -> String {
+        match self.current_protocol.load(Ordering::Relaxed) {
+            1 => "srt".to_string(),
+            2 => "rist".to_string(),
+            _ => "unknown".to_string(),
+        }
+    }
+
+    // Instantaneous rate computation using last snapshot
+    pub fn instantaneous_rates(&self) -> (f64, f64) {
+        // returns (bps_out, mbps_recv)
+        let now = Instant::now();
+        let bytes_in = self.bytes_in_total.load(Ordering::Relaxed);
+        let bytes_out = self.bytes_out_total.load(Ordering::Relaxed);
+        let mut guard = self.last_snapshot.lock().expect("lock snapshot");
+        let (last_t, last_in, last_out) = *guard;
+        let dt = now.duration_since(last_t).as_secs_f64();
+        // update snapshot for next call
+        *guard = (now, bytes_in, bytes_out);
+        if dt <= 0.0 { return (0.0, 0.0); }
+        let delta_in = bytes_in.saturating_sub(last_in) as f64;
+        let delta_out = bytes_out.saturating_sub(last_out) as f64;
+        let bps_out = (delta_out * 8.0) / dt;
+        let mbps_recv = (delta_in * 8.0) / dt / 1_000_000.0;
+        (bps_out, mbps_recv)
+    }
 }
 
 // Buckets d'histogramme adaptés à des latences HTTP (secondes)

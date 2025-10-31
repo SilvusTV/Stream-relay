@@ -18,13 +18,9 @@ pub fn stats_endpoint(metrics: &State<Arc<Metrics>>) -> Json<StatsResponse> {
     let uptime_secs = metrics.start_time.elapsed().as_secs() as i64;
     metrics.uptime_seconds.set(uptime_secs);
 
-    // Agrégation simple depuis les compteurs globaux
-    let bytes_in = metrics.bytes_in_total.load(std::sync::atomic::Ordering::Relaxed) as f64;
-    let bytes_out = metrics.bytes_out_total.load(std::sync::atomic::Ordering::Relaxed) as f64;
-
-    let seconds = uptime_secs.max(1) as f64;
-    let bps_out = (bytes_out * 8.0) / seconds; // bitrate moyen sortant en bps
-    let mbps_recv = (bytes_in * 8.0) / seconds / 1_000_000.0; // Mbps moyen entrant
+    // Débits instantanés basés sur le dernier snapshot
+    let (bps_out, mbps_recv) = metrics.instantaneous_rates();
+    let protocol = metrics.protocol_string();
 
     let data = StatsData {
         bitrate: bps_out as i64,
@@ -39,7 +35,7 @@ pub fn stats_endpoint(metrics: &State<Arc<Metrics>>) -> Json<StatsResponse> {
         uptime: uptime_secs,
     };
 
-    Json(StatsResponse { data, status: "ok" })
+    Json(StatsResponse { protocol, data, status: "ok" })
 }
 
 // Endpoint Prometheus /metrics
